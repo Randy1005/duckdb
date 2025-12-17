@@ -138,7 +138,7 @@ public:
 	      num_threads(NumericCast<idx_t>(TaskScheduler::GetScheduler(context).NumberOfThreads())),
 	      temporary_memory_state(TemporaryMemoryManager::Get(context).Register(context)), finalized(false),
 	      active_local_states(0), total_size(0), max_partition_size(0), max_partition_count(0),
-	      probe_side_requirement(0), scanned_data(false) {
+	      probe_side_requirement(0), scanned_data(false), is_reusable(false) {
 		hash_table = op.InitializeHashTable(context);
 
 		// For perfect hash join
@@ -181,7 +181,7 @@ public:
 	unique_ptr<TemporaryMemoryState> temporary_memory_state;
 
 	//! Global HT used by the join
-	unique_ptr<JoinHashTable> hash_table;
+	shared_ptr<JoinHashTable> hash_table;
 	//! The perfect hash join executor (if any)
 	unique_ptr<PerfectHashJoinExecutor> perfect_join_executor;
 	//! Whether or not the hash table has been finalized
@@ -208,6 +208,9 @@ public:
 
 	bool skip_filter_pushdown = false;
 	unique_ptr<JoinFilterGlobalState> global_filter_state;
+
+	//! Whether the hash table is reusable (e.g. cached)
+	bool is_reusable;
 };
 
 unique_ptr<JoinFilterLocalState> JoinFilterPushdownInfo::GetLocalState(JoinFilterGlobalState &gstate) const {
@@ -307,7 +310,20 @@ unique_ptr<JoinHashTable> PhysicalHashJoin::InitializeHashTable(ClientContext &c
 }
 
 unique_ptr<GlobalSinkState> PhysicalHashJoin::GetGlobalSinkState(ClientContext &context) const {
-	return make_uniq<HashJoinGlobalSinkState>(*this, context);
+	auto state = make_uniq<HashJoinGlobalSinkState>(*this, context);
+	
+	// Experimental: Check ObjectCache
+	auto &cache = ObjectCache::GetObjectCache(context);
+	string key = "HashJoin_Cache_Test";
+	auto cached_entry = cache.Get<JoinHashTableCacheEntry>(key);
+	if (cached_entry) {
+		std::cout << "DEBUG: Retrieved Hash Table from cache!" << std::endl;
+		state->hash_table = cached_entry->hash_table;
+		state->is_reusable = true;
+		state->perfect_join_executor.reset();
+	}
+	
+	return std::move(state);
 }
 
 unique_ptr<LocalSinkState> PhysicalHashJoin::GetLocalSinkState(ExecutionContext &context) const {
@@ -329,6 +345,10 @@ void JoinFilterPushdownInfo::Sink(DataChunk &chunk, JoinFilterLocalState &lstate
 SinkResultType PhysicalHashJoin::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
 	auto &gstate = input.global_state.Cast<HashJoinGlobalSinkState>();
 	auto &lstate = input.local_state.Cast<HashJoinLocalSinkState>();
+
+	if (gstate.is_reusable) {
+		return SinkResultType::FINISHED;
+	}
 
 	// resolve the join keys for the right chunk
 	lstate.join_keys.Reset();
@@ -579,8 +599,24 @@ public:
 	}
 
 	void FinishEvent() override {
+		// printf("DEBUG: HashJoinFinalizeEvent::FinishEvent called\n");
+		
 		sink.hash_table->GetDataCollection().VerifyEverythingPinned();
 		sink.hash_table->finalized = true;
+
+		std::cout << "DEBUG: HashJoinFinalizeEvent::FinishEvent called. Count: " << sink.hash_table->Count() << std::endl;
+
+		// Experimental: Insert into ObjectCache
+		auto &context = pipeline->GetClientContext();
+		auto &cache = ObjectCache::GetObjectCache(context);
+		string key = "HashJoin_Cache_Test";
+		
+		if (!cache.Get<JoinHashTableCacheEntry>(key)) {
+			std::cout << "DEBUG: Caching Hash Table... (Count: " << sink.hash_table->Count() << ")" << std::endl;
+			auto entry = make_shared_ptr<JoinHashTableCacheEntry>(sink.hash_table);
+			cache.Put(key, entry);
+			sink.is_reusable = true;
+		}
 	}
 
 	static constexpr idx_t CHUNKS_PER_TASK = 64;
@@ -890,6 +926,11 @@ SinkFinalizeType PhysicalHashJoin::Finalize(Pipeline &pipeline, Event &event, Cl
                                             OperatorSinkFinalizeInput &input) const {
 	auto &sink = input.global_state.Cast<HashJoinGlobalSinkState>();
 	auto &ht = *sink.hash_table;
+
+	if (sink.is_reusable) {
+		sink.finalized = true;
+		return SinkFinalizeType::READY;
+	}
 
 	sink.temporary_memory_state->UpdateReservation(context);
 	sink.external = sink.temporary_memory_state->GetReservation() < sink.total_size;
@@ -1516,8 +1557,10 @@ SourceResultType PhysicalHashJoin::GetDataInternal(ExecutionContext &context, Da
 		auto guard = gstate.Lock();
 		if (gstate.global_stage != HashJoinSourceStage::DONE) {
 			gstate.global_stage = HashJoinSourceStage::DONE;
-			sink.hash_table->Reset();
-			sink.temporary_memory_state->SetZero();
+			if (!sink.is_reusable) {
+				sink.hash_table->Reset();
+				sink.temporary_memory_state->SetZero();
+			}
 		}
 		return SourceResultType::FINISHED;
 	}

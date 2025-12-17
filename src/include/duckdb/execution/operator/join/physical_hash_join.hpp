@@ -14,8 +14,27 @@
 #include "duckdb/execution/operator/join/physical_comparison_join.hpp"
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/planner/operator/logical_join.hpp"
+#include "duckdb/storage/object_cache.hpp"
 
 namespace duckdb {
+
+class JoinHashTableCacheEntry : public ObjectCacheEntry {
+public:
+	static constexpr const char* TYPE_NAME = "JoinHashTableCacheEntry";
+
+	explicit JoinHashTableCacheEntry(shared_ptr<JoinHashTable> ht) 
+		: hash_table(std::move(ht)) {}
+
+	string GetObjectType() override {
+		return ObjectType();
+	}
+
+	static string ObjectType() {
+		return TYPE_NAME;
+	}
+
+	shared_ptr<JoinHashTable> hash_table;
+};
 
 //! PhysicalHashJoin represents a hash loop join between two tables
 class PhysicalHashJoin : public PhysicalComparisonJoin {
