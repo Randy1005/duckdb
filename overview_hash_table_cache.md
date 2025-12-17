@@ -83,7 +83,7 @@ Segmentation fault (core dumped)
 
 ### Potential Root Cause Diagnosis
 
-This is likely a **Resource Deallocation** issue rather than just a dangling pointer to an operator:
+This is likely a **Resource Deallocation** issue:
 
 1. **Memory Pool Release**: Query 1 manages a memory pool for its operators. Upon completion, DuckDB's execution plan triggers a cleanup that might be releasing the underlying memory chunks of the hash table, ignoring the `shared_ptr` count because it thinks it's the primary owner.
 2. **Operator Lifecycle**: The cached object still holds pointers to **Operator A** (PhysicalHashJoin instance from Query 1). When Query 2 follows these to perform probing, it hits deleted memory.
@@ -91,5 +91,8 @@ This is likely a **Resource Deallocation** issue rather than just a dangling poi
 ---
 
 ### Instructions for Reproducing the Segmentation Fault
-1. Run `make` in the directory `duckdb-python/external/duckdb`, this will build the "hacky persistent hasht table cache" and the unit test `duckdb-python/external/duckdb/test/api/test_hash_join_cache.cpp`.
-1. Run `./build/release/test/unittest "[api][hashjoin]"` to see the debug logs confirming cache insertion and retrieval, followed by the segmentation fault.
+
+1. Clone [my duckdb-python repo](https://github.com/Randy1005/duckdb-python.git)
+2. Run `git submodule update --init --recursive`, this should grab my custom changes from my fork [here](https://github.com/Randy1005/duckdb/tree/custom-duckdb-changes)
+3. Run `make` in the directory `duckdb-python/external/duckdb`, this will build the "hacky persistent hasht table cache" and the unit test `duckdb-python/external/duckdb/test/api/test_hash_join_cache.cpp`.
+4. In `duckdb-python/external/duckdb`, run `./build/release/test/unittest "[api][hashjoin]"` to see the debug logs confirming cache insertion and retrieval, followed by the segmentation fault.
