@@ -92,7 +92,7 @@ This is likely a **Resource Deallocation** issue:
 
 ### Instructions for Reproducing the Segmentation Fault
 
-1. Clone [my duckdb-python repo](https://github.com/Randy1005/duckdb-python.git)
-2. Run `git submodule update --init --recursive`, this should grab my custom changes from my fork [here](https://github.com/Randy1005/duckdb/tree/custom-duckdb-changes)
-3. Run `make` in the directory `duckdb-python/external/duckdb`, this will build the "hacky persistent hasht table cache" and the unit test `duckdb-python/external/duckdb/test/api/test_hash_join_cache.cpp`.
+1. Clone [my duckdb-python repo](https://github.com/Randy1005/duckdb-python.git).
+2. Run `git submodule update --init --recursive`, this should grab my custom changes from my fork [here](https://github.com/Randy1005/duckdb/tree/custom-duckdb-changes).
+3. Run `make` in the directory `duckdb-python/external/duckdb`, this will build the "hacky persistent hash table cache" and the unit test `duckdb-python/external/duckdb/test/api/test_hash_join_cache.cpp`.
 4. In `duckdb-python/external/duckdb`, run `./build/release/test/unittest "[api][hashjoin]"` to see the debug logs confirming cache insertion and retrieval, followed by the segmentation fault.
